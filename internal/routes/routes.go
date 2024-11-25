@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"receipt-mgmt/internal/controller"
 	"receipt-mgmt/internal/middleware"
 	"receipt-mgmt/internal/tests"
 
@@ -18,7 +19,8 @@ func CategoryRoutes(router *gin.Engine) {
 	receiptGroup.Use(middleware.AuthMiddleware())
 	{
 		// receiptGroup.GET("/defaults", controller.ParseReceipt)
-
-
+		receiptGroup.POST("/upload", controller.UploadReceipt)
+		// receipts.GET("/:id", controller.GetReceipt)
+		// receipts.GET("/", controller.ListReceipts)
 	}
 }

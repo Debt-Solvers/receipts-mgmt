@@ -2,207 +2,157 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"log"
+	"mime/multipart"
 	"net/http"
-	"os"
-	"receipt-mgmt/db"
 	"receipt-mgmt/internal/models"
 	"receipt-mgmt/utils"
-	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
 
-// services/ocr/ocr.go
-type OCRService struct {
-	client *vision.ImageAnnotatorClient
+type ReceiptController struct {
+	DB                   *gorm.DB
+	CustomVisionClient   *customvision.PredictionClient
+	ComputerVisionClient *computervision.BaseClient
 }
 
-func NewOCRService(ctx context.Context) (*OCRService, error) {
-	client, err := vision.NewImageAnnotatorClient(ctx)
-	if err != nil {
-			return nil, fmt.Errorf("failed to create client: %v", err)
+func (rc *ReceiptController) UploadReceipt(c *gin.Context) {
+	// Extract user ID from authenticated context
+	userID, exists := c.Get("userID")
+	if !exists {
+		utils.SendResponse(c, http.StatusUnauthorized, "User not authenticated", nil, nil)
+		return
 	}
-	return &OCRService{client: client}, nil
+
+	// Get file from request
+	file, err := c.FormFile("receipt")
+	if err != nil {
+		utils.SendResponse(c, http.StatusBadRequest, "No receipt file uploaded", nil, nil)
+		return
+	}
+
+	// Open file
+	src, err := file.Open()
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Could not open file", nil, nil)
+		return
+	}
+	defer src.Close()
+
+	// Step 1: Custom Vision Classification
+	classificationResult, err := rc.classifyReceipt(src)
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Receipt classification failed", nil, err.Error())
+		return
+	}
+	if !classificationResult.IsReceipt {
+		utils.SendResponse(c, http.StatusBadRequest, "Invalid receipt image", nil, gin.H{
+			"confidence": classificationResult.Confidence,
+		})
+		return
+	}
+
+	// Reset file reader for OCR
+	_, err = src.Seek(0, 0)
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to reset file reader", nil, err.Error())
+		return
+	}
+
+	// Step 2: OCR with Computer Vision
+	ocrResult, err := rc.performOCR(src)
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "OCR processing failed", nil, err.Error())
+		return
+	}
+
+	// Step 3: Create Receipt Record
+	receipt := models.Receipt{
+		UserID:      userID.(string),
+		ImageURL:    "uploadedImageURL", // Placeholder; implement image upload to storage
+		Status:      "processing",
+		TotalAmount: ocrResult.TotalAmount,
+		Merchant:    ocrResult.Merchant,
+		ScannedDate: time.Now(),
+		Items:       ocrResult.Items,
+	}
+
+	// Save to database
+	if err := rc.DB.Create(&receipt).Error; err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to save receipt", nil, err.Error())
+		return
+	}
+
+	utils.SendResponse(c, http.StatusOK, "Receipt uploaded successfully", gin.H{
+		"receipt_id": receipt.ReceiptID,
+	}, nil)
 }
 
-// handlers/receipt_handler.go
-func UploadReceipt(c *gin.Context) {
-  // Get the uploaded file
-  file, err := c.FormFile("receipt")
-  if err != nil {
-      utils.SendResponse(c, http.StatusBadRequest, "No file uploaded", nil, err.Error())
-      return
-  }
 
-  // Get user ID from context
-  userID, _ := c.Get("userId")
+func (rc *ReceiptController) classifyReceipt(file multipart.File) (*ClassificationResult, error) {
+	// Implement Custom Vision prediction
+	// Use your Custom Vision endpoint and prediction key
+	predictionResults, err := rc.CustomVisionClient.PredictImage(
+		context.Background(), 
+		// Your project ID
+		// Your iteration name
+		file,
+		nil,
+	)
 
-  // Generate unique filename
-  filename := fmt.Sprintf("%d_%s", time.Now().Unix(), file.Filename)
-  filepath := fmt.Sprintf("uploads/receipts/%s", filename)
+	if err != nil {
+		return nil, err
+	}
 
-  // Save the file
-  if err := c.SaveUploadedFile(file, filepath); err != nil {
-      utils.SendResponse(c, http.StatusInternalServerError, "Failed to save file", nil, err.Error())
-      return
-  }
+	// Process prediction results
+	for _, prediction := range *predictionResults.Predictions {
+		if *prediction.TagName == "receipt" && *prediction.Probability > 0.7 {
+			return &ClassificationResult{
+				IsReceipt:   true,
+				Confidence: *prediction.Probability,
+			}, nil
+		}
+	}
 
-  // Create receipt record
-  receipt := &models.Receipt{
-    UserID:    userID.(uint),
-    ImagePath: filepath,
-    Status:    "pending",
-  }
-
-  if err := db.GetDBInstance().Create(receipt).Error; err != nil {
-    utils.SendResponse(c, http.StatusInternalServerError, "Failed to create receipt record", nil, err.Error())
-    return
-  }
-
-  // Trigger OCR processing
-  go ProcessReceipt(receipt.ID)
-
-  utils.SendResponse(c, http.StatusOK, "Receipt uploaded successfully", receipt, nil)
+	return &ClassificationResult{IsReceipt: false}, nil
 }
 
-// services/ocr/process.go
-func (s *OCRService) ProcessReceipt(ctx context.Context, imagePath string) (*models.Receipt, error) {
-  // Read the image file
-  file, err := os.Open(imagePath)
-  if err != nil {
-      return nil, fmt.Errorf("failed to open image: %v", err)
-  }
-  defer file.Close()
 
-  image, err := vision.NewImageFromReader(file)
-  if err != nil {
-      return nil, fmt.Errorf("failed to create image: %v", err)
-  }
 
-  // Detect text in the image
-  texts, err := s.client.DetectDocumentText(ctx, image, nil)
-  if err != nil {
-      return nil, fmt.Errorf("failed to detect text: %v", err)
-  }
+func (rc *ReceiptController) performOCR(file multipart.File) (*OCRResult, error) {
+	// Perform OCR using Azure Computer Vision
+	result, err := rc.ComputerVisionClient.RecognizeReceiptInStream(
+		context.Background(), 
+		file,
+	)
 
-  // Parse the extracted text
-  receiptData := parseReceiptText(texts.Text)
-  
-  return receiptData, nil
+	if err != nil {
+		return nil, err
+	}
+
+	// Extract and parse receipt details
+	return parseReceiptDetails(result), nil
 }
 
-// services/ocr/process.go
-func (s *OCRService) ProcessReceipt(ctx context.Context, imagePath string) (*models.Receipt, error) {
-  // Read the image file
-  file, err := os.Open(imagePath)
-  if err != nil {
-      return nil, fmt.Errorf("failed to open image: %v", err)
-  }
-  defer file.Close()
-
-  image, err := vision.NewImageFromReader(file)
-  if err != nil {
-      return nil, fmt.Errorf("failed to create image: %v", err)
-  }
-
-  // Detect text in the image
-  texts, err := s.client.DetectDocumentText(ctx, image, nil)
-  if err != nil {
-      return nil, fmt.Errorf("failed to detect text: %v", err)
-  }
-
-  // Parse the extracted text
-  receiptData := parseReceiptText(texts.Text)
-  
-  return receiptData, nil
+// Structs for intermediate processing
+type ClassificationResult struct {
+	IsReceipt   bool
+	Confidence float64
 }
 
-func parseReceiptText(text string) *models.Receipt {
-  receipt := &models.Receipt{}
-  
-  // Use regular expressions to extract information
-  // This is a basic example - you'll need to customize based on your receipt formats
-  
-  // Extract total amount
-  totalRegex := regexp.MustCompile(`Total:?\s*\$?(\d+\.\d{2})`)
-  if matches := totalRegex.FindStringSubmatch(text); len(matches) > 1 {
-      receipt.TotalAmount, _ = strconv.ParseFloat(matches[1], 64)
-  }
-
-  // Extract date
-  dateRegex := regexp.MustCompile(`(\d{2}/\d{2}/\d{4})`)
-  if matches := dateRegex.FindStringSubmatch(text); len(matches) > 1 {
-      receipt.Date, _ = time.Parse("01/02/2006", matches[1])
-  }
-
-  // Extract merchant name (this is simplified)
-  lines := strings.Split(text, "\n")
-  if len(lines) > 0 {
-      receipt.Merchant = lines[0]
-  }
-
-  return receipt
+type OCRResult struct {
+	TotalAmount float64
+	Merchant    string
+	Items       []models.Item
 }
-// workers/receipt_processor.go
-func ProcessReceipt(receiptID uint) {
-  db := db.GetDBInstance()
-  
-  // Get the receipt record
-  var receipt models.Receipt
-  if err := db.First(&receipt, receiptID).Error; err != nil {
-      log.Printf("Failed to find receipt: %v", err)
-      return
-  }
 
-  // Update status to processing
-  db.Model(&receipt).Update("status", "processing")
-
-  // Initialize OCR service
-  ctx := context.Background()
-  ocrService, err := ocr.NewOCRService(ctx)
-  if err != nil {
-      log.Printf("Failed to create OCR service: %v", err)
-      db.Model(&receipt).Update("status", "failed")
-      return
-  }
-
-  // Process the receipt
-  processedReceipt, err := ocrService.ProcessReceipt(ctx, receipt.ImagePath)
-  if err != nil {
-      log.Printf("Failed to process receipt: %v", err)
-      db.Model(&receipt).Update("status", "failed")
-      return
-  }
-
-  // Update receipt with extracted data
-  updates := map[string]interface{}{
-      "total_amount": processedReceipt.TotalAmount,
-      "date":        processedReceipt.Date,
-      "merchant":    processedReceipt.Merchant,
-      "status":      "completed",
-  }
-  
-  if err := db.Model(&receipt).Updates(updates).Error; err != nil {
-      log.Printf("Failed to update receipt: %v", err)
-      return
-  }
-
-  // Create expense record
-  expense := models.Expense{
-      UserID:     receipt.UserID,
-      Amount:     processedReceipt.TotalAmount,
-      Date:       processedReceipt.Date,
-      Merchant:   processedReceipt.Merchant,
-      ReceiptID:  receipt.ID,
-  }
-
-  if err := db.Create(&expense).Error; err != nil {
-      log.Printf("Failed to create expense: %v", err)
-      return
-  }
+// Utility function to parse Computer Vision receipt result
+func parseReceiptDetails(result computervision.ReadOperationResult) *OCRResult {
+	// Implement complex parsing logic to extract:
+	// - Total amount
+	// - Merchant name
+	// - Individual line items
+	// This will require regex, text parsing, and possibly ML techniques
 }
