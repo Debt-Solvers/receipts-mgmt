@@ -1,0 +1,11 @@
+database:
+  host: localhost #localhost # The hostname of your database (default: localhost)
+  port: 5432 # The port on which your database is running (default: 5432 for PostgreSQL)
+  user: postgres # Your database username (default set to 'postgres')
+  password: root # Your database password (default set to 'root')
+  name: debt_solver # The name of your database (default set to 'debt_solver')
+  sslmode: disable # SSL mode for PostgreSQL connection (default set to 'disable')
+
+jwt:
+  secret: DebtSolver # Secret key for signing JWT tokens
+  expiration_hours: 24 # Number of hours after which JWT tokens expire (default: 24)
