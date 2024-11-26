@@ -18,6 +18,8 @@ func main() {
 	// Initialize Gin engine
 	server := gin.Default()
 
+	// Register routes
+	routes.ReceiptRoutes(server)
 	routes.AddHealthCheckRoute(server)
 	// Check for environment variable port
 	port := os.Getenv("PORT")
