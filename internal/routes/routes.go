@@ -17,8 +17,8 @@ func ReceiptRoutes(router *gin.Engine) {
 	receiptsGroup := router.Group("/api/v1/receipts")
 	receiptsGroup.Use(middleware.AuthMiddleware())
 	{
-		receiptsGroup.POST("/upload", receiptController.UploadReceipt)
-		receiptsGroup.GET("/", receiptController.ListReceipts)
-		receiptsGroup.GET("/:id", receiptController.GetReceipt)
+		receiptsGroup.POST("/upload", controller.UploadReceipt)
+		// receiptsGroup.GET("/", controller.ListReceipts)
+		// receiptsGroup.GET("/:id", controller.GetReceipt)
 	}
 }

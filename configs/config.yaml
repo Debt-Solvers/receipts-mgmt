@@ -1,5 +1,5 @@
 database:
-  host: localhost #localhost # The hostname of your database (default: localhost)
+  host: localhost # The hostname of your database (default: localhost)
   port: 5432 # The port on which your database is running (default: 5432 for PostgreSQL)
   user: postgres # Your database username (default set to 'postgres')
   password: root # Your database password (default set to 'root')
@@ -9,3 +9,18 @@ database:
 jwt:
   secret: DebtSolver # Secret key for signing JWT tokens
   expiration_hours: 24 # Number of hours after which JWT tokens expire (default: 24)
+
+azure:
+  computer_vision:
+    key: "9n71b0Kk5qF6JXdcrgO86ebvxJs32sWbkOyo2xnjYG8Hs2YG5iERJQQJ99AKACYeBjFXJ3w3AAAFACOGyRxu"
+    endpoint: "https://debt-solver-exp-mgmt.cognitiveservices.azure.com/"
+
+  custom_vision:
+    key: "8tvhYbSe6guiMhx2ojFXjE8F685fBSEglzv1mbnqThL5Tvmu0AGBJQQJ99AKACYeBjFXJ3w3AAAIACOGl3XW"
+    endpoint: "https://debtsolverreceipts-prediction.cognitiveservices.azure.com/"
+    project_id: "71378f30-33f7-47f6-9b0d-303a786d0697"
+    iteration: "Iteration2"
+    url: "https://debtsolverreceipts-prediction.cognitiveservices.azure.com/customvision/v3.0/Prediction/71378f30-33f7-47f6-9b0d-303a786d0697/classify/iterations/Iteration2/image" # Added URL field
+  document_intelligence:
+    key: "8VEPwQLmcFfAfgVnsCuc0oQnGbBN2xlKidSMysUEALcvxiMhZRUKJQQJ99AKACYeBjFXJ3w3AAALACOGuVME"
+    endpoint: "https://debtsolver-formrecognizer.cognitiveservices.azure.com/"
