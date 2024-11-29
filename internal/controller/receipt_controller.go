@@ -45,10 +45,16 @@ func UploadReceipt(c *gin.Context) {
 	}
 
 	// Validate category_id
-	if !models.IsCategoryIDValid(categoryID) { // Assuming this function checks if the category exists
+	isValid, err := models.IsCategoryIDValid(categoryID)
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, fmt.Sprintf("Error checking category: %v", err), nil, nil)
+		return
+	}
+	if !isValid {
 		utils.SendResponse(c, http.StatusBadRequest, "Invalid category_id", nil, nil)
 		return
 	}
+
 
 	// Generate file hash
 	file.Seek(0, io.SeekStart) // Ensure pointer starts at beginning
@@ -133,10 +139,11 @@ func UploadReceipt(c *gin.Context) {
 
 	// Save Receipt and Associated Items
 	if err := models.CreateReceipt(&receipt); err != nil {
-		utils.SendResponse(c, http.StatusInternalServerError, "Failed to save receipt", nil, nil)
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to save receipt", nil, map[string]interface{}{
+			"error": err.Error(), // Include detailed error message
+		})
 		return
 	}
-
 	// utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", parsedReceiptDetails, nil)
 	utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", receipt, nil)
 
