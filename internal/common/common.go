@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
+	"log"
 	"receipt-mgmt/db"
 	"receipt-mgmt/internal/models"
 )
@@ -17,11 +18,17 @@ func IsTokenActive(token string) bool {
 	return err == nil
 }
 
-// Function to generate SHA-256 hash of file content
+// GenerateFileHash generates a SHA-256 hash for the given file
 func GenerateFileHash(file io.Reader) (string, error) {
-	hash := sha256.New()
-	if _, err := io.Copy(hash, file); err != nil {
-			return "", err
+	// Create a new SHA-256 hash
+	hasher := sha256.New()
+	// Copy the file contents into the hasher
+	if _, err := io.Copy(hasher, file); err != nil {
+		log.Println("Error generating file hash:", err)
+		return "", err
 	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
+	// Compute the hash
+	hash := hasher.Sum(nil)
+	// Return the hash as a hexadecimal string
+	return hex.EncodeToString(hash), nil
 }

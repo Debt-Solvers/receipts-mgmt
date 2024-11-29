@@ -37,12 +37,27 @@ func UploadReceipt(c *gin.Context) {
 	}
 	defer file.Close()
 
+	// Get the category_id from the form
+	categoryID := c.PostForm("category_id")
+	if categoryID == "" {
+		utils.SendResponse(c, http.StatusBadRequest, "category_id is required", nil, nil)
+		return
+	}
+
+	// Validate category_id
+	if !models.IsCategoryIDValid(categoryID) { // Assuming this function checks if the category exists
+		utils.SendResponse(c, http.StatusBadRequest, "Invalid category_id", nil, nil)
+		return
+	}
+
 	// Generate file hash
+	file.Seek(0, io.SeekStart) // Ensure pointer starts at beginning
 	fileHash, err := common.GenerateFileHash(file)
 	if err != nil {
 		utils.SendResponse(c, http.StatusInternalServerError, "Failed to generate file hash", nil, nil)
 		return
 	}
+	file.Seek(0, io.SeekStart) // Reset pointer for further use
 
 	// Check if file hash already exists in the database
 	if exists, err := models.CheckFileHashExists(fileHash); err == nil && exists {
@@ -116,11 +131,11 @@ func UploadReceipt(c *gin.Context) {
 		FileHash: 			 fileHash,			
 	}
 
-	// // Save Receipt and Associated Items
-	// if err := models.CreateReceipt(&receipt); err != nil {
-	// 	utils.SendResponse(c, http.StatusInternalServerError, "Failed to save receipt", nil, nil)
-	// 	return
-	// }
+	// Save Receipt and Associated Items
+	if err := models.CreateReceipt(&receipt); err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to save receipt", nil, nil)
+		return
+	}
 
 	// utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", parsedReceiptDetails, nil)
 	utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", receipt, nil)

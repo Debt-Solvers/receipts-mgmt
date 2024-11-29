@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/rand"
 	"strconv"
 
 	"net/http"
@@ -153,9 +154,14 @@ func AnalyzeReceipt(imageBytes []byte) (map[string]interface{}, error) {
 }
 
 
-
 func getPoll(operationLocation, key string) (map[string]interface{}, error) {
-	client := &http.Client{}
+	client := &http.Client{
+		Timeout: 10 * time.Second, // 10 seconds timeout for the HTTP request
+	}
+
+	retryCount := 0
+	maxRetries := 10         // Maximum number of retries
+	backoffInterval := 2     // Initial backoff interval in seconds
 
 	for {
 		// Create GET request to the operation location
@@ -178,19 +184,13 @@ func getPoll(operationLocation, key string) (map[string]interface{}, error) {
 			return nil, fmt.Errorf("failed to read poll response body: %v", err)
 		}
 
-		// Log the raw response body for debugging
-		// fmt.Printf("Raw poll response: %s\n", string(body))
-
 		// Parse the response into a map to return the entire response
 		var pollResponse map[string]interface{}
 		if err := json.Unmarshal(body, &pollResponse); err != nil {
 			return nil, fmt.Errorf("failed to parse poll response: %v", err)
 		}
 
-		// Log parsed response for debugging
-		fmt.Printf("Parsed poll response: %+v\n", pollResponse)
-
-		// Check status field and handle accordingly
+		// Check the status field and handle accordingly
 		status, ok := pollResponse["status"].(string)
 		if !ok {
 			return nil, fmt.Errorf("unexpected poll response format: missing status field")
@@ -206,11 +206,83 @@ func getPoll(operationLocation, key string) (map[string]interface{}, error) {
 			return nil, fmt.Errorf("receipt analysis failed: %s", string(body))
 
 		default:
-			// Receipt analysis still in progress; wait and retry
-			time.Sleep(2 * time.Second)
+			// If the status is still "in progress", use exponential backoff for retries
+			if retryCount < maxRetries {
+				retryCount++
+				// Add jitter to the backoff interval to prevent "thundering herd" effect
+				jitter := time.Duration(rand.Intn(2*backoffInterval) - backoffInterval) * time.Second
+				backoffDuration := time.Duration(backoffInterval) * time.Second + jitter
+				fmt.Printf("Analysis in progress. Retrying in %v...\n", backoffDuration)
+				time.Sleep(backoffDuration)
+
+				// Exponential backoff: increase the backoff interval for the next retry
+				backoffInterval *= 2
+			} else {
+				return nil, fmt.Errorf("polling retries exceeded max retries (%d)", maxRetries)
+			}
 		}
 	}
 }
+
+
+
+// func getPoll(operationLocation, key string) (map[string]interface{}, error) {
+// 	client := &http.Client{}
+
+// 	for {
+// 		// Create GET request to the operation location
+// 		req, err := http.NewRequest("GET", operationLocation, nil)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("failed to create poll request: %v", err)
+// 		}
+// 		req.Header.Set("Ocp-Apim-Subscription-Key", key)
+
+// 		// Execute the request
+// 		resp, err := client.Do(req)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("failed to poll operation location: %v", err)
+// 		}
+// 		defer resp.Body.Close()
+
+// 		// Read the response body
+// 		body, err := io.ReadAll(resp.Body)
+// 		if err != nil {
+// 			return nil, fmt.Errorf("failed to read poll response body: %v", err)
+// 		}
+
+// 		// Log the raw response body for debugging
+// 		// fmt.Printf("Raw poll response: %s\n", string(body))
+
+// 		// Parse the response into a map to return the entire response
+// 		var pollResponse map[string]interface{}
+// 		if err := json.Unmarshal(body, &pollResponse); err != nil {
+// 			return nil, fmt.Errorf("failed to parse poll response: %v", err)
+// 		}
+
+// 		// Log parsed response for debugging
+// 		fmt.Printf("Parsed poll response: %+v\n", pollResponse)
+
+// 		// Check status field and handle accordingly
+// 		status, ok := pollResponse["status"].(string)
+// 		if !ok {
+// 			return nil, fmt.Errorf("unexpected poll response format: missing status field")
+// 		}
+
+// 		switch status {
+// 		case "succeeded":
+// 			// If successful, return the entire parsed response
+// 			return pollResponse, nil
+
+// 		case "failed":
+// 			// If failed, return an error with the entire response
+// 			return nil, fmt.Errorf("receipt analysis failed: %s", string(body))
+
+// 		default:
+// 			// Receipt analysis still in progress; wait and retry
+// 			time.Sleep(2 * time.Second)
+// 		}
+// 	}
+// }
 
 
 // ParseReceiptInformation parses the receipt information and returns a ReceiptParseResult
@@ -284,7 +356,7 @@ func ParseReceiptInformation(response map[string]interface{}) (*ReceiptParseResu
 
   // Input receipt Date
   if receiptResult.ReceiptDate == "" {
-    receiptResult.ReceiptDate = time.Now().Format("2006-01-02 15:04:05")
+    receiptResult.ReceiptDate = time.Now().String()
   }
 
 	// Extract and assign receipt date (if available)

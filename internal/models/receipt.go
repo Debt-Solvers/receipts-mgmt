@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"gorm.io/gorm"
 )
 
 // Receipt represents the receipt model with its associated fields.
@@ -26,7 +27,22 @@ type Receipt struct {
 	Discounts      float64   `gorm:"type:decimal(10,2)" json:"discounts"`
 	CreatedAt      time.Time `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
+	DeletedAt   	gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`            // Soft delete
 }
+
+// Category represents a user-defined or default spending category
+type Category struct {
+	ID 					uuid.UUID      `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"category_id"`
+	UserID      *uuid.UUID     `gorm:"type:uuid" json:"user_id,omitempty"`           // Nullable for default categories
+	Name        string         `gorm:"size:50;not null" json:"name"`                 // e.g., "Food", "Utilities"
+	Description string         `gorm:"type:text" json:"description"`                 // Optional description
+	ColorCode   string         `gorm:"size:7" json:"color_code"`                     // Optional color code (e.g., #FFFFFF)
+	IsDefault   bool           `gorm:"default:false" json:"is_default"`              // True if the category is default
+	CreatedAt   time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"created_at"`
+	UpdatedAt   time.Time      `gorm:"default:CURRENT_TIMESTAMP" json:"updated_at"`
+	DeletedAt   gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`            // Soft delete
+}
+
 
 // CheckFileHashExists checks if a receipt with the given file hash already exists in the database
 func CheckFileHashExists(fileHash string) (bool, error) {
@@ -40,6 +56,36 @@ func CheckFileHashExists(fileHash string) (bool, error) {
 	}
 	// If the count is greater than 0, a duplicate exists
 	return count > 0, nil
+}
+
+// IsCategoryIDValid checks if a category ID exists in the database
+// func IsCategoryIDValid(categoryID string) bool {
+// 	DB := db.GetDBInstance()
+
+// 	var count int64
+// 	err := DB.Model(&Category{}).Where("id = ?", categoryID).Count(&count).Error
+// 	if err != nil {
+// 		// Optionally log the error
+// 		fmt.Printf("Error validating category ID: %v\n", err)
+// 		return false
+// 	}
+
+// 	return count > 0
+// }
+
+func IsCategoryIDValid(categoryID uuid.UUID) (bool, error) {
+	// Get the category from the database
+	var category models.Category
+	if err := db.GetDBInstance().Where("id = ?", categoryID).First(&category).Error; err != nil {
+		// If no category is found or there is an error
+		if gorm.ErrRecordNotFound == err {
+			return false, nil // Category doesn't exist
+		}
+		return false, err // Other database errors
+	}
+
+	// Category exists
+	return true, nil
 }
 
 
@@ -70,3 +116,30 @@ func CheckFileHashExists(fileHash string) (bool, error) {
 // 		return nil
 // 	})
 // }
+
+func CreateReceipt(receipt *Receipt) error {
+	// Start a database transaction
+	DB := db.GetDBInstance()
+
+	return DB.Transaction(func(tx *gorm.DB) error {
+		// Create the receipt
+		if err := tx.Create(receipt).Error; err != nil {
+			return err
+		}
+
+		// Create associated items
+		for i := range receipt.Items {
+			// Set the ReceiptID for each item
+			receipt.Items[i].ReceiptID = receipt.ReceiptID
+		}
+
+		// Batch create items
+		if len(receipt.Items) > 0 {
+			if err := tx.Create(&receipt.Items).Error; err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
+}
