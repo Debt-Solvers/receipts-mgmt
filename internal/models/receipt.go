@@ -2,6 +2,7 @@ package models
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"receipt-mgmt/db"
 	"time"
@@ -12,23 +13,24 @@ import (
 
 // Receipt represents the receipt model with its associated fields.
 type Receipt struct {
-	ReceiptID       uuid.UUID      `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"receipt_id"` // UUID for receipt ID
-	UserID          uuid.UUID      `gorm:"type:uuid;not null" json:"user_id"` 
-	Image          []byte    `gorm:"type:bytea;not null" json:"image"` // Changed to hold the actual image as bytea
-	Status         string    `gorm:"type:varchar(50);not null" json:"status"` // Values: pending, processing, completed, failed
-	TotalAmount    float64   `gorm:"type:decimal(10,2)" json:"total_amount"`
-	Merchant       string    `gorm:"type:varchar(255)" json:"merchant"`
-	Items          json.RawMessage    `gorm:"type:jsonb" json:"items"` // Store items as JSON
-	ScannedDate    time.Time `gorm:"not null;default:CURRENT_TIMESTAMP" json:"scanned_date"`
-	TransactionDate string    `gorm:"type:varchar(50);not null" json:"transaction_date"`
-	TransactionTime string   `gorm:"type:varchar(50);not null" json:"transaction_time"`
-  FileHash        string   `gorm:"type:varchar(64);unique;not null" json:"file_hash"`
-	Tax            float64   `gorm:"type:decimal(10,2)" json:"tax"`
-	Discounts      float64   `gorm:"type:decimal(10,2)" json:"discounts"`
-	CreatedAt      time.Time `gorm:"autoCreateTime" json:"created_at"`
-	UpdatedAt      time.Time `gorm:"autoUpdateTime" json:"updated_at"`
-	DeletedAt   	gorm.DeletedAt `gorm:"index" json:"deleted_at,omitempty"`            // Soft delete
+	ReceiptID        uuid.UUID       `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"receipt_id"`
+	UserID           uuid.UUID       `gorm:"type:uuid;not null" json:"user_id"`
+	Image            []byte          `gorm:"type:bytea;not null" json:"image"`
+	Status           string          `gorm:"type:varchar(50);not null" json:"status"`
+	TotalAmount      float64         `gorm:"type:decimal(10,2)" json:"total_amount"`
+	Merchant         string          `gorm:"type:varchar(255)" json:"merchant"`
+	Items            json.RawMessage `gorm:"type:jsonb" json:"items"` // JSONB column
+	ScannedDate      time.Time       `gorm:"not null;default:CURRENT_TIMESTAMP" json:"scanned_date"`
+	TransactionDate  string          `gorm:"type:varchar(50);not null" json:"transaction_date"`
+	TransactionTime  string          `gorm:"type:varchar(50);not null" json:"transaction_time"`
+	FileHash         string          `gorm:"type:varchar(64);unique;not null" json:"file_hash"`
+	Tax              float64         `gorm:"type:decimal(10,2)" json:"tax"`
+	Discounts        float64         `gorm:"type:decimal(10,2)" json:"discounts"`
+	CreatedAt        time.Time       `gorm:"autoCreateTime" json:"created_at"`
+	UpdatedAt        time.Time       `gorm:"autoUpdateTime" json:"updated_at"`
+	DeletedAt        gorm.DeletedAt  `gorm:"index" json:"deleted_at,omitempty"`
 }
+
 
 // Category represents a user-defined or default spending category
 type Category struct {
@@ -59,34 +61,35 @@ func CheckFileHashExists(fileHash string) (bool, error) {
 }
 
 // IsCategoryIDValid checks if a category ID exists in the database
-// func IsCategoryIDValid(categoryID string) bool {
-// 	DB := db.GetDBInstance()
+func IsCategoryIDValid(categoryID string) (bool, error) {
+	DB := db.GetDBInstance()
 
-// 	var count int64
-// 	err := DB.Model(&Category{}).Where("id = ?", categoryID).Count(&count).Error
-// 	if err != nil {
-// 		// Optionally log the error
-// 		fmt.Printf("Error validating category ID: %v\n", err)
-// 		return false
-// 	}
-
-// 	return count > 0
-// }
-
-func IsCategoryIDValid(categoryID uuid.UUID) (bool, error) {
-	// Get the category from the database
-	var category models.Category
-	if err := db.GetDBInstance().Where("id = ?", categoryID).First(&category).Error; err != nil {
-		// If no category is found or there is an error
-		if gorm.ErrRecordNotFound == err {
-			return false, nil // Category doesn't exist
-		}
-		return false, err // Other database errors
+	var count int64
+	err := DB.Model(&Category{}).Where("id = ?", categoryID).Count(&count).Error
+	if err != nil {
+		// Return false and propagate the error
+		return false, err
 	}
 
-	// Category exists
-	return true, nil
+	// Return true if the count is greater than zero
+	return count > 0, nil
 }
+
+
+// func IsCategoryIDValid(categoryID uuid.UUID) (bool, error) {
+// 	// Get the category from the database
+// 	var category models.Category
+// 	if err := db.GetDBInstance().Where("id = ?", categoryID).First(&category).Error; err != nil {
+// 		// If no category is found or there is an error
+// 		if gorm.ErrRecordNotFound == err {
+// 			return false, nil // Category doesn't exist
+// 		}
+// 		return false, err // Other database errors
+// 	}
+
+// 	// Category exists
+// 	return true, nil
+// }
 
 
 // // Existing Receipt and Item structs remain the same
@@ -122,24 +125,13 @@ func CreateReceipt(receipt *Receipt) error {
 	DB := db.GetDBInstance()
 
 	return DB.Transaction(func(tx *gorm.DB) error {
-		// Create the receipt
+		// Create the receipt (including the JSON Items field)
 		if err := tx.Create(receipt).Error; err != nil {
-			return err
+			log.Printf("Error creating receipt: %v", err)
+			return fmt.Errorf("error creating receipt: %w", err)
 		}
-
-		// Create associated items
-		for i := range receipt.Items {
-			// Set the ReceiptID for each item
-			receipt.Items[i].ReceiptID = receipt.ReceiptID
-		}
-
-		// Batch create items
-		if len(receipt.Items) > 0 {
-			if err := tx.Create(&receipt.Items).Error; err != nil {
-				return err
-			}
-		}
-
 		return nil
 	})
 }
+
+
