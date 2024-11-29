@@ -1,208 +1,156 @@
 package controller
 
 import (
-	"context"
 	"fmt"
-	"log"
+	"io"
 	"net/http"
-	"os"
-	"receipt-mgmt/db"
+	"receipt-mgmt/internal/common"
 	"receipt-mgmt/internal/models"
+	"receipt-mgmt/internal/services"
 	"receipt-mgmt/utils"
-	"regexp"
-	"strconv"
-	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
-// services/ocr/ocr.go
-type OCRService struct {
-	client *vision.ImageAnnotatorClient
-}
-
-func NewOCRService(ctx context.Context) (*OCRService, error) {
-	client, err := vision.NewImageAnnotatorClient(ctx)
-	if err != nil {
-			return nil, fmt.Errorf("failed to create client: %v", err)
-	}
-	return &OCRService{client: client}, nil
-}
-
-// handlers/receipt_handler.go
 func UploadReceipt(c *gin.Context) {
-  // Get the uploaded file
-  file, err := c.FormFile("receipt")
+	// Extract user ID from context (assumes AuthMiddleware sets this)
+	userID, exists := c.Get("userId")
+	if !exists {
+		utils.SendResponse(c, http.StatusUnauthorized, "Unauthorized", nil, nil)
+		return
+	}
+
+	// Parse multipart form
+	err := c.Request.ParseMultipartForm(10 << 20) // 10 MB max
+	if err != nil {
+		utils.SendResponse(c, http.StatusBadRequest, "Invalid file upload", nil, nil)
+		return
+	}
+
+	// Get the file from the request
+	file, header, err := c.Request.FormFile("receipt")
+	if err != nil {
+		utils.SendResponse(c, http.StatusBadRequest, "No file uploaded", nil, nil)
+		return
+	}
+	defer file.Close()
+
+	// Get the category_id from the form
+	categoryID := c.PostForm("category_id")
+	if categoryID == "" {
+		utils.SendResponse(c, http.StatusBadRequest, "category_id is required", nil, nil)
+		return
+	}
+
+	// Validate category_id
+	if !models.IsCategoryIDValid(categoryID) { // Assuming this function checks if the category exists
+		utils.SendResponse(c, http.StatusBadRequest, "Invalid category_id", nil, nil)
+		return
+	}
+
+	// Generate file hash
+	file.Seek(0, io.SeekStart) // Ensure pointer starts at beginning
+	fileHash, err := common.GenerateFileHash(file)
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to generate file hash", nil, nil)
+		return
+	}
+	file.Seek(0, io.SeekStart) // Reset pointer for further use
+
+	// Check if file hash already exists in the database
+	if exists, err := models.CheckFileHashExists(fileHash); err == nil && exists {
+		utils.SendResponse(c, http.StatusBadRequest, "Receipt already uploaded", nil, nil)
+		return
+	}
+
+	// Reset file reader for further operations (e.g., saving the file)
+	file.Seek(0, io.SeekStart)
+
+	// Read file contents
+	fileBytes, err := io.ReadAll(file)
+	if err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to read file", nil, nil)
+		return
+	}
+	// Log the filename and size
+	fmt.Printf("Received file: %s (%d bytes)\n", header.Filename, len(fileBytes))
+	
+  //Step 1: Validate the receipt image using Custom Vision
+  isValidReceipt, err := services.NewCustomVisionService().ValidateReceiptImage(fileBytes)
+	
+	if err != nil {
+    // Log the error
+    errorMsg := fmt.Sprintf("Error in Custom Vision API: %v\n", err)
+    // Send the error response
+    utils.SendResponse(c, http.StatusBadRequest, errorMsg, nil, nil)
+    return
+	}
+
+	if !isValidReceipt { 
+    // Create an error message string
+    errorMsg := "Receipt is invalid according to Custom Vision (no positive tag found or too low probability)."
+    
+    // Log the error
+    fmt.Println(errorMsg)
+    
+    // Send the error response with the error message
+    utils.SendResponse(c, http.StatusBadRequest, errorMsg, nil, nil)
+    return 
+  }
+
+  // Step 2: Extract Receipt Details
+  receiptDetails, err := services.AnalyzeReceipt(fileBytes)
   if err != nil {
-      utils.SendResponse(c, http.StatusBadRequest, "No file uploaded", nil, err.Error())
-      return
-  }
-
-  // Get user ID from context
-  userID, _ := c.Get("userId")
-
-  // Generate unique filename
-  filename := fmt.Sprintf("%d_%s", time.Now().Unix(), file.Filename)
-  filepath := fmt.Sprintf("uploads/receipts/%s", filename)
-
-  // Save the file
-  if err := c.SaveUploadedFile(file, filepath); err != nil {
-      utils.SendResponse(c, http.StatusInternalServerError, "Failed to save file", nil, err.Error())
-      return
-  }
-
-  // Create receipt record
-  receipt := &models.Receipt{
-    UserID:    userID.(uint),
-    ImagePath: filepath,
-    Status:    "pending",
-  }
-
-  if err := db.GetDBInstance().Create(receipt).Error; err != nil {
-    utils.SendResponse(c, http.StatusInternalServerError, "Failed to create receipt record", nil, err.Error())
+    utils.SendResponse(c, http.StatusInternalServerError,fmt.Sprintf("Analyze receipt error: %v", err), nil, nil)
     return
   }
 
-  // Trigger OCR processing
-  go ProcessReceipt(receipt.ID)
+	// Step 3: Return extracted details Parse the receipt information
+  parsedReceiptDetails, err := services.ParseReceiptInformation(receiptDetails)
+  if err != nil {
+    utils.SendResponse(c, http.StatusInternalServerError, fmt.Sprintf("Failed to parse receipt details: %v", err), nil, nil)
+    return
+  }
+	
+  // Prepare Receipt Model
+	 receipt := models.Receipt{
+		ReceiptID:       uuid.New(),
+		UserID:          userID.(uuid.UUID),
+		Image:           fileBytes, // Store the actual image as byte array
+		Status:          "completed",
+		TotalAmount:     parsedReceiptDetails.TotalAmount,
+		Merchant:        parsedReceiptDetails.Merchant,
+		ScannedDate:     time.Now(),
+		TransactionDate: parsedReceiptDetails.TransactionDate, // Extracted from receipt
+		TransactionTime: parsedReceiptDetails.TransactionTime, // Extracted from receipt
+		Tax:             parsedReceiptDetails.Tax,
+		Discounts:       parsedReceiptDetails.Discounts,
+		Items:           parsedReceiptDetails.Items, // Assuming items are in JSON format
+		FileHash: 			 fileHash,			
+	}
 
-  utils.SendResponse(c, http.StatusOK, "Receipt uploaded successfully", receipt, nil)
+	// Save Receipt and Associated Items
+	if err := models.CreateReceipt(&receipt); err != nil {
+		utils.SendResponse(c, http.StatusInternalServerError, "Failed to save receipt", nil, nil)
+		return
+	}
+
+	// utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", parsedReceiptDetails, nil)
+	utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", receipt, nil)
+
+
+	// // Respond with success
+	// utils.SendResponse(c, http.StatusOK, "Receipt processed successfully", receipt, nil)
 }
 
-// services/ocr/process.go
-func (s *OCRService) ProcessReceipt(ctx context.Context, imagePath string) (*models.Receipt, error) {
-  // Read the image file
-  file, err := os.Open(imagePath)
-  if err != nil {
-      return nil, fmt.Errorf("failed to open image: %v", err)
-  }
-  defer file.Close()
 
-  image, err := vision.NewImageFromReader(file)
-  if err != nil {
-      return nil, fmt.Errorf("failed to create image: %v", err)
-  }
+// Additional methods for receipt management can be added here
+// func (rc *ReceiptController) ListReceipts(c *gin.Context) {
+// 	// Implement listing receipts
+// }
 
-  // Detect text in the image
-  texts, err := s.client.DetectDocumentText(ctx, image, nil)
-  if err != nil {
-      return nil, fmt.Errorf("failed to detect text: %v", err)
-  }
-
-  // Parse the extracted text
-  receiptData := parseReceiptText(texts.Text)
-  
-  return receiptData, nil
-}
-
-// services/ocr/process.go
-func (s *OCRService) ProcessReceipt(ctx context.Context, imagePath string) (*models.Receipt, error) {
-  // Read the image file
-  file, err := os.Open(imagePath)
-  if err != nil {
-      return nil, fmt.Errorf("failed to open image: %v", err)
-  }
-  defer file.Close()
-
-  image, err := vision.NewImageFromReader(file)
-  if err != nil {
-      return nil, fmt.Errorf("failed to create image: %v", err)
-  }
-
-  // Detect text in the image
-  texts, err := s.client.DetectDocumentText(ctx, image, nil)
-  if err != nil {
-      return nil, fmt.Errorf("failed to detect text: %v", err)
-  }
-
-  // Parse the extracted text
-  receiptData := parseReceiptText(texts.Text)
-  
-  return receiptData, nil
-}
-
-func parseReceiptText(text string) *models.Receipt {
-  receipt := &models.Receipt{}
-  
-  // Use regular expressions to extract information
-  // This is a basic example - you'll need to customize based on your receipt formats
-  
-  // Extract total amount
-  totalRegex := regexp.MustCompile(`Total:?\s*\$?(\d+\.\d{2})`)
-  if matches := totalRegex.FindStringSubmatch(text); len(matches) > 1 {
-      receipt.TotalAmount, _ = strconv.ParseFloat(matches[1], 64)
-  }
-
-  // Extract date
-  dateRegex := regexp.MustCompile(`(\d{2}/\d{2}/\d{4})`)
-  if matches := dateRegex.FindStringSubmatch(text); len(matches) > 1 {
-      receipt.Date, _ = time.Parse("01/02/2006", matches[1])
-  }
-
-  // Extract merchant name (this is simplified)
-  lines := strings.Split(text, "\n")
-  if len(lines) > 0 {
-      receipt.Merchant = lines[0]
-  }
-
-  return receipt
-}
-// workers/receipt_processor.go
-func ProcessReceipt(receiptID uint) {
-  db := db.GetDBInstance()
-  
-  // Get the receipt record
-  var receipt models.Receipt
-  if err := db.First(&receipt, receiptID).Error; err != nil {
-      log.Printf("Failed to find receipt: %v", err)
-      return
-  }
-
-  // Update status to processing
-  db.Model(&receipt).Update("status", "processing")
-
-  // Initialize OCR service
-  ctx := context.Background()
-  ocrService, err := ocr.NewOCRService(ctx)
-  if err != nil {
-      log.Printf("Failed to create OCR service: %v", err)
-      db.Model(&receipt).Update("status", "failed")
-      return
-  }
-
-  // Process the receipt
-  processedReceipt, err := ocrService.ProcessReceipt(ctx, receipt.ImagePath)
-  if err != nil {
-      log.Printf("Failed to process receipt: %v", err)
-      db.Model(&receipt).Update("status", "failed")
-      return
-  }
-
-  // Update receipt with extracted data
-  updates := map[string]interface{}{
-      "total_amount": processedReceipt.TotalAmount,
-      "date":        processedReceipt.Date,
-      "merchant":    processedReceipt.Merchant,
-      "status":      "completed",
-  }
-  
-  if err := db.Model(&receipt).Updates(updates).Error; err != nil {
-      log.Printf("Failed to update receipt: %v", err)
-      return
-  }
-
-  // Create expense record
-  expense := models.Expense{
-      UserID:     receipt.UserID,
-      Amount:     processedReceipt.TotalAmount,
-      Date:       processedReceipt.Date,
-      Merchant:   processedReceipt.Merchant,
-      ReceiptID:  receipt.ID,
-  }
-
-  if err := db.Create(&expense).Error; err != nil {
-      log.Printf("Failed to create expense: %v", err)
-      return
-  }
-}
+// func (rc *ReceiptController) GetReceipt(c *gin.Context) {
+// 	// Implement get single receipt
+// }

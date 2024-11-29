@@ -14,10 +14,12 @@ func main() {
 	if _, err := db.ConnectDatabase(); err != nil {
 		log.Fatalf("Database connection error: %v", err)
 	}
-
+	
 	// Initialize Gin engine
 	server := gin.Default()
 
+	// Register routes
+	routes.ReceiptRoutes(server)
 	routes.AddHealthCheckRoute(server)
 	// Check for environment variable port
 	port := os.Getenv("PORT")

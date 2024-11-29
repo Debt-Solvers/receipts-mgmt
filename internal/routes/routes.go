@@ -1,6 +1,7 @@
 package routes
 
 import (
+	"receipt-mgmt/internal/controller"
 	"receipt-mgmt/internal/middleware"
 	"receipt-mgmt/internal/tests"
 
@@ -12,13 +13,12 @@ func AddHealthCheckRoute(router *gin.Engine) {
 	router.GET("/health", tests.HealthCheck)
 }
 
-
-func CategoryRoutes(router *gin.Engine) {
-	receiptGroup := router.Group("/api/v1/receipts")
-	receiptGroup.Use(middleware.AuthMiddleware())
+func ReceiptRoutes(router *gin.Engine) {
+	receiptsGroup := router.Group("/api/v1/receipts")
+	receiptsGroup.Use(middleware.AuthMiddleware())
 	{
-		// receiptGroup.GET("/defaults", controller.ParseReceipt)
-
-
+		receiptsGroup.POST("/upload", controller.UploadReceipt)
+		// receiptsGroup.GET("/", controller.ListReceipts)
+		// receiptsGroup.GET("/:id", controller.GetReceipt)
 	}
 }
