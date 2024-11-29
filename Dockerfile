@@ -12,7 +12,7 @@ COPY . .
 RUN go build -o receipts-service ./cmd/receipt-service/main.go
 
 # Stage 2: Minimal runtime with `glibc` support
-FROM frolvlad/alpine-glibc:3.17
+FROM frolvlad/alpine-glibc:latest
 
 WORKDIR /app
 
