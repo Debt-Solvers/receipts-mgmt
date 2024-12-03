@@ -15,6 +15,7 @@ import (
 type Receipt struct {
 	ReceiptID        uuid.UUID       `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"receipt_id"`
 	UserID           uuid.UUID       `gorm:"type:uuid;not null" json:"user_id"`
+	CategoryID       uuid.UUID       `gorm:"type:uuid;not null" json:"category_id"`
 	Image            []byte          `gorm:"type:bytea;not null" json:"image"`
 	Status           string          `gorm:"type:varchar(50);not null" json:"status"`
 	TotalAmount      float64         `gorm:"type:decimal(10,2)" json:"total_amount"`
@@ -46,6 +47,20 @@ type Category struct {
 }
 
 
+// Expense represents an individual expense entry associated with a user and category
+type Expense struct {
+	ExpenseID          uuid.UUID     `gorm:"type:uuid;primaryKey;default:uuid_generate_v4()" json:"expense_id"`
+	UserID             uuid.UUID     `gorm:"type:uuid;not null" json:"user_id"`
+	CategoryID         uuid.UUID     `gorm:"type:uuid;not null" json:"category_id"`
+	Amount             float64       `gorm:"type:decimal(10,2);not null" json:"amount"`
+	Date               time.Time     `gorm:"type:timestamp;not null" json:"date"`
+	Description        string        `gorm:"type:text" json:"description"`
+	ReceiptID          *uuid.UUID    `gorm:"type:uuid" json:"receipt_id"`
+	CreatedAt          time.Time     `gorm:"default:CURRENT_TIMESTAMP" json:"created_at"`
+	UpdatedAt          time.Time     `gorm:"default:CURRENT_TIMESTAMP" json:"updated_at"`
+}
+
+
 // CheckFileHashExists checks if a receipt with the given file hash already exists in the database
 func CheckFileHashExists(fileHash string) (bool, error) {
   // Use GetDBInstance to get the DB instance
@@ -59,6 +74,7 @@ func CheckFileHashExists(fileHash string) (bool, error) {
 	// If the count is greater than 0, a duplicate exists
 	return count > 0, nil
 }
+
 
 // IsCategoryIDValid checks if a category ID exists in the database
 func IsCategoryIDValid(categoryID string) (bool, error) {
@@ -75,50 +91,11 @@ func IsCategoryIDValid(categoryID string) (bool, error) {
 	return count > 0, nil
 }
 
+func CreateExpense(expense *Expense) error {
+	DB := db.GetDBInstance()
+	return DB.Create(expense).Error
+}
 
-// func IsCategoryIDValid(categoryID uuid.UUID) (bool, error) {
-// 	// Get the category from the database
-// 	var category models.Category
-// 	if err := db.GetDBInstance().Where("id = ?", categoryID).First(&category).Error; err != nil {
-// 		// If no category is found or there is an error
-// 		if gorm.ErrRecordNotFound == err {
-// 			return false, nil // Category doesn't exist
-// 		}
-// 		return false, err // Other database errors
-// 	}
-
-// 	// Category exists
-// 	return true, nil
-// }
-
-
-// // Existing Receipt and Item structs remain the same
-// func CreateReceipt(receipt *Receipt) error {
-// 	// Start a database transaction
-// 	DB := db.GetDBInstance()
-
-// 	return db.Transaction(func(tx *gorm.DB) error {
-// 		// Create the receipt
-// 		if err := tx.Create(receipt).Error; err != nil {
-// 			return err
-// 		}
-
-// 		// Create associated items
-// 		for i := range receipt.Items {
-// 			// Set the ReceiptID for each item
-// 			receipt.Items[i].ReceiptID = receipt.ReceiptID
-// 		}
-
-// 		// Batch create items
-// 		if len(receipt.Items) > 0 {
-// 			if err := tx.Create(&receipt.Items).Error; err != nil {
-// 				return err
-// 			}
-// 		}
-
-// 		return nil
-// 	})
-// }
 
 func CreateReceipt(receipt *Receipt) error {
 	// Start a database transaction
@@ -132,6 +109,26 @@ func CreateReceipt(receipt *Receipt) error {
 		}
 		return nil
 	})
+}
+
+// Get All receipts for a user
+func GetReceiptsByUserID(userID uuid.UUID) ([]Receipt, error) {
+	// Start a database transaction
+	DB := db.GetDBInstance()
+
+	var receipts []Receipt
+	err := DB.Where("user_id = ?", userID).Find(&receipts).Error
+	return receipts, err
+}
+
+// Get Single Receipt By ID
+func GetReceiptByID(receiptID, userID uuid.UUID) (Receipt, error) {
+	// Start a database transaction
+	DB := db.GetDBInstance()
+
+	var receipt Receipt
+	err := DB.Where("receipt_id = ? AND user_id = ?", receiptID, userID).First(&receipt).Error
+	return receipt, err
 }
 
 

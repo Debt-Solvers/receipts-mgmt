@@ -18,7 +18,8 @@ func ReceiptRoutes(router *gin.Engine) {
 	receiptsGroup.Use(middleware.AuthMiddleware())
 	{
 		receiptsGroup.POST("/upload", controller.UploadReceipt)
-		// receiptsGroup.GET("/", controller.ListReceipts)
-		// receiptsGroup.GET("/:id", controller.GetReceipt)
+		receiptsGroup.GET("/", controller.GetAllReceipts)       // Get all receipts
+		receiptsGroup.GET("/:id", controller.GetReceiptByID)   // Get single receipt
+		receiptsGroup.DELETE("/:id", controller.DeleteReceipt) // Delete receipt
 	}
 }
