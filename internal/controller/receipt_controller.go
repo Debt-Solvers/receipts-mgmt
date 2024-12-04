@@ -176,25 +176,26 @@ func UploadReceipt(c *gin.Context) {
 
 		// Parse TransactionTime if available
 		if parsedReceiptDetails.TransactionTime != "" {
-			transactionTime, err := time.Parse("15:04", parsedReceiptDetails.TransactionTime)
+			transactionTime, err := time.Parse("15:04:05", parsedReceiptDetails.TransactionTime)
 			if err != nil {
-				utils.SendResponse(c, http.StatusBadRequest, fmt.Sprintf("Invalid transaction time: %v", err), nil, nil)
-				return
+					utils.SendResponse(c, http.StatusBadRequest, fmt.Sprintf("Invalid transaction time: %v", err), nil, nil)
+					return
 			}
-
+	
 			// Combine date and time
 			combinedDateTime = time.Date(
-				transactionDate.Year(), transactionDate.Month(), transactionDate.Day(),
-				transactionTime.Hour(), transactionTime.Minute(), transactionTime.Second(),
-				0, time.UTC,
+					transactionDate.Year(), transactionDate.Month(), transactionDate.Day(),
+					transactionTime.Hour(), transactionTime.Minute(), transactionTime.Second(),
+					0, time.UTC,
 			)
 		} else {
-			// Use the transaction date with default time (midnight)
-			combinedDateTime = time.Date(
-				transactionDate.Year(), transactionDate.Month(), transactionDate.Day(),
-				0, 0, 0, 0, time.UTC,
-			)
+				// Use the transaction date with default time (midnight)
+				combinedDateTime = time.Date(
+						transactionDate.Year(), transactionDate.Month(), transactionDate.Day(),
+						0, 0, 0, 0, time.UTC,
+				)
 		}
+	
 	}
 
 	// Create expense with fallback or parsed date
